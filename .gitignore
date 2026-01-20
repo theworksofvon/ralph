@@ -1,0 +1,6 @@
+profiles/zai.env
+profiles/default.env
+
+# Keep examples
+!profiles/*.example
+!profiles/template.env
