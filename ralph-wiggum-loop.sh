@@ -12,6 +12,8 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+DIM='\033[2m'
 NC='\033[0m' # No Color
 
 # Defaults
@@ -20,12 +22,18 @@ CHANGELOG_FILE="CHANGELOG.md"
 CLI_TOOL="claude"
 MODEL=""
 PROFILE=""
+INTERACTIVE=false
+PLAN_MODE=false
 SCRIPT_DIR="$(cd "$(dirname "${0}")" && pwd)"
 PROFILES_DIR="$SCRIPT_DIR/profiles"
 
 # Parse arguments
 show_help() {
-    echo "Usage: $0 [options]"
+    echo "Usage: $0 [command] [options]"
+    echo ""
+    echo "Commands:"
+    echo "  plan                  Start planning mode to create/refine tasks.md"
+    echo "  run (default)         Run the task loop"
     echo ""
     echo "Options:"
     echo "  -t, --tasks FILE      Tasks markdown file (default: tasks.md)"
@@ -33,17 +41,29 @@ show_help() {
     echo "  -C, --cli TOOL        CLI tool: 'claude' or 'opencode' (default: claude)"
     echo "  -m, --model MODEL     Model to use (e.g., 'opus', 'openai/gpt-4o')"
     echo "  -p, --profile NAME    Load profile from ~/.ralph/profiles/NAME.env"
+    echo "  -i, --interactive     Run Claude with full TUI (manual exit required)"
     echo "  -h, --help            Show this help message"
     echo ""
-    echo "Profiles:"
-    echo "  Available: $(ls "$PROFILES_DIR"/*.env 2>/dev/null | xargs -n1 basename | sed 's/.env$//' | tr '\n' ' ')"
-    echo ""
     echo "Examples:"
-    echo "  $0                                    # Run with defaults"
-    echo "  $0 --profile zai                      # Use z.ai backend"
-    echo "  $0 --profile zai -m haiku -t my-tasks.md"
+    echo "  $0 plan --profile zai          # Plan tasks interactively"
+    echo "  $0 --profile zai               # Run task loop"
+    echo "  $0 -i --profile zai            # Run with interactive Claude"
     exit 0
 }
+
+# Check for subcommand first
+case "${1:-}" in
+    plan)
+        PLAN_MODE=true
+        shift
+        ;;
+    run)
+        shift
+        ;;
+    -*)
+        # It's a flag, not a subcommand
+        ;;
+esac
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -52,6 +72,7 @@ while [[ $# -gt 0 ]]; do
         -C|--cli) CLI_TOOL="$2"; shift 2 ;;
         -m|--model) MODEL="$2"; shift 2 ;;
         -p|--profile) PROFILE="$2"; shift 2 ;;
+        -i|--interactive) INTERACTIVE=true; shift ;;
         -h|--help) show_help ;;
         *) echo -e "${RED}Unknown option: $1${NC}"; show_help ;;
     esac
@@ -69,11 +90,49 @@ if [[ -n "$PROFILE" ]]; then
     fi
 fi
 
+# ============================================
+# PLAN MODE
+# ============================================
+if [[ "$PLAN_MODE" == true ]]; then
+    echo -e "${YELLOW}"
+    echo "  ╔═══════════════════════════════════╗"
+    echo "  ║     RALPH PLANNING MODE           ║"
+    echo "  ╚═══════════════════════════════════╝"
+    echo -e "${NC}"
+
+    PLAN_PROMPT="You're helping plan tasks for a project.
+
+Your job is to help create or refine a tasks.md file. This file will be used by an autonomous agent to complete work.
+
+Current tasks file: $TASKS_FILE
+$(if [[ -f "$TASKS_FILE" ]]; then echo "The file exists - read it to see current tasks."; else echo "The file doesn't exist yet - we'll create it."; fi)
+
+Guidelines for tasks.md:
+- Use '- [ ]' checkbox format for each task
+- Be specific - include file paths, function names, context
+- Add a References section with helpful context, links, patterns to follow
+- Order by dependency when possible
+- Keep tasks atomic - one clear objective each
+
+Help the user think through what needs to be done and create a solid task list.
+When the user is happy with the plan, write it to $TASKS_FILE."
+
+    cmd=(claude --dangerously-skip-permissions)
+    [[ -n "$MODEL" ]] && cmd+=(--model "$MODEL")
+    cmd+=("$PLAN_PROMPT")
+
+    "${cmd[@]}"
+    exit $?
+fi
+
+# ============================================
+# RUN MODE
+# ============================================
+
 # Print Ralph's greeting
 echo -e "${YELLOW}"
 echo "  ╔═══════════════════════════════════╗"
 echo "  ║     RALPH WIGGUM LOOP             ║"
-echo "  ║     \"I'm helping!\"                ║"
 echo "  ╚═══════════════════════════════════╝"
 echo -e "${NC}"
 
@@ -81,9 +140,7 @@ echo -e "${NC}"
 if [[ ! -f "$TASKS_FILE" ]]; then
     echo -e "${RED}Error: Tasks file '$TASKS_FILE' not found!${NC}"
     echo ""
-    echo "Create a tasks.md file with tasks like:"
-    echo "  - [ ] First task to complete"
-    echo "  - [ ] Second task to complete"
+    echo "Create one with: $0 plan"
     exit 1
 fi
 
@@ -95,16 +152,16 @@ if [[ ! -f "$CHANGELOG_FILE" ]]; then
     echo "" >> "$CHANGELOG_FILE"
 fi
 
-# Check for incomplete tasks
-has_incomplete_tasks() {
-    grep -q '\- \[ \]' "$TASKS_FILE"
-}
-
 # Count tasks
 count_tasks() {
     local total=$(grep -c '\- \[' "$TASKS_FILE" 2>/dev/null || echo "0")
     local done=$(grep -c '\- \[x\]' "$TASKS_FILE" 2>/dev/null || echo "0")
     echo "$done/$total"
+}
+
+# Get next incomplete task text
+get_next_task() {
+    grep '\- \[ \]' "$TASKS_FILE" | head -1 | sed 's/^- \[ \] //'
 }
 
 # The prompt that gives Claude full control
@@ -132,6 +189,7 @@ echo -e "Changelog:  ${GREEN}$CHANGELOG_FILE${NC}"
 echo ""
 
 iteration=0
+start_time=$(date +%s)
 
 while true; do
     # Check if there are incomplete tasks
@@ -140,6 +198,8 @@ while true; do
     fi
     iteration=$((iteration + 1))
     progress=$(count_tasks)
+    next_task=$(get_next_task)
+    iter_start=$(date +%s)
 
     echo -e "${YELLOW}"
     echo "═══════════════════════════════════════"
@@ -147,9 +207,18 @@ while true; do
     echo "═══════════════════════════════════════"
     echo -e "${NC}"
 
+    # Show what task is likely next
+    echo -e "${CYAN}Next task:${NC} ${DIM}$next_task${NC}"
+    echo ""
+
     # Build the command
     if [[ "$CLI_TOOL" == "claude" ]]; then
-        cmd=(claude --dangerously-skip-permissions --print)
+        if [[ "$INTERACTIVE" == true ]]; then
+            cmd=(claude --dangerously-skip-permissions)
+        else
+            # Use stdbuf to force line-buffered output for streaming
+            cmd=(stdbuf -oL claude --dangerously-skip-permissions --print)
+        fi
         [[ -n "$MODEL" ]] && cmd+=(--model "$MODEL")
         cmd+=("$RALPH_PROMPT")
     elif [[ "$CLI_TOOL" == "opencode" ]]; then
@@ -166,9 +235,22 @@ while true; do
     echo "────────────────────────────────────────"
 
     if "${cmd[@]}"; then
+        iter_end=$(date +%s)
+        iter_duration=$((iter_end - iter_start))
+
         echo ""
         echo "────────────────────────────────────────"
-        echo -e "${GREEN}Iteration complete.${NC}"
+
+        # Show completion summary
+        new_progress=$(count_tasks)
+        echo -e "${GREEN}✓ Iteration #$iteration complete${NC} ${DIM}(${iter_duration}s)${NC}"
+        echo -e "${BLUE}Progress:${NC} $new_progress tasks done"
+
+        # Show last changelog entry
+        last_entry=$(grep -A1 "^\- \[" "$CHANGELOG_FILE" 2>/dev/null | tail -1)
+        if [[ -n "$last_entry" ]]; then
+            echo -e "${BLUE}Last logged:${NC} ${DIM}$last_entry${NC}"
+        fi
     else
         echo ""
         echo -e "${RED}Error or interruption. Stopping.${NC}"
@@ -179,10 +261,13 @@ while true; do
     sleep 2  # Brief pause between iterations
 done
 
+end_time=$(date +%s)
+total_duration=$((end_time - start_time))
+
 echo -e "${GREEN}"
 echo "═══════════════════════════════════════"
-echo "  All tasks complete! Ralph did good!"
-echo "  \"Me fail English? That's unpossible!\""
+echo "  All tasks complete!"
+echo "  $iteration iterations in ${total_duration}s"
 echo "═══════════════════════════════════════"
 echo -e "${NC}"
 echo -e "${BLUE}Check $CHANGELOG_FILE for details.${NC}"
