@@ -15,19 +15,61 @@ source ~/.zshrc
 
 Requires: [Claude Code](https://github.com/anthropics/claude-code), Node.js 18+, zsh
 
-## Usage
+## Workflow
+
+### 1. Plan
 
 ```bash
-cd /your/project
-ralph                       # default API
-ralph --profile zai         # z.ai backend
-ralph -t my-tasks.md        # custom task file
-ralph --profile zai -m haiku
+ralph plan --profile zai
 ```
 
-## Task File
+Opens an interactive Claude session to create/refine your tasks.md. Chat with Claude about what you want to build, refine the task list, then tell it to write the file. Type `/exit` when done.
 
-Create `tasks.md` in your project:
+### 2. Run
+
+```bash
+ralph --profile zai
+```
+
+Runs the task loop. Claude picks a task, completes it, marks it done, logs to changelog, repeats until all tasks are complete.
+
+### 3. Intervene (if needed)
+
+- `Ctrl+C` stops everything
+- Run `ralph` again to resume (picks up where tasks left off)
+- Run `claude` directly to fix things manually
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `ralph plan` | Interactive planning session to create tasks.md |
+| `ralph` or `ralph run` | Run the autonomous task loop |
+
+## Flags
+
+| Flag | Description |
+|------|-------------|
+| `-t, --tasks` | Tasks file (default: tasks.md) |
+| `-c, --changelog` | Changelog file (default: CHANGELOG.md) |
+| `-p, --profile` | API profile (zai, default) |
+| `-m, --model` | Model (opus, sonnet, haiku) |
+| `-i, --interactive` | Run with full Claude TUI (see output, manual exit) |
+| `-C, --cli` | CLI tool (claude, opencode) |
+
+## Examples
+
+```bash
+ralph plan --profile zai              # Plan tasks
+ralph --profile zai                   # Run loop
+ralph --profile zai -i                # Run with interactive output
+ralph --profile zai -m haiku          # Use haiku model
+ralph -t docs/tasks.md                # Custom task file
+```
+
+## Task File Format
+
+Create `tasks.md` in your project root:
 
 ```markdown
 # Tasks
@@ -42,20 +84,17 @@ Create `tasks.md` in your project:
 - Run tests with npm test
 ```
 
-Claude picks a task, does it, marks it `[x]`, logs to `CHANGELOG.md`, repeats.
+- `- [ ]` = incomplete
+- `- [x]` = done (Claude marks these)
+- Add a References section for context Claude can use
 
-## Flags
+## Profiles
 
-| Flag | Description |
-|------|-------------|
-| `-t, --tasks` | Tasks file (default: tasks.md) |
-| `-c, --changelog` | Changelog file (default: CHANGELOG.md) |
-| `-p, --profile` | API profile (zai, default) |
-| `-m, --model` | Model (opus, sonnet, haiku) |
-| `-C, --cli` | CLI tool (claude, opencode) |
+Switch between API providers:
 
-## Workflow
+```bash
+ralph --profile zai      # z.ai backend
+ralph --profile default  # Anthropic direct
+```
 
-- `Ctrl+C` stops everything
-- Run `ralph` again to resume (picks up where tasks left off)
-- Run `claude` directly if you need to intervene manually
+Create new profiles by copying `~/.ralph/profiles/template.env`.
